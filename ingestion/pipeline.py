@@ -16,13 +16,9 @@ def load_feeds() -> list[dict]:
         return json.load(f)
 
 def parse_published(published_parsed: datetime) -> datetime:
-    if published_parsed: is None:
+    if published_parsed is None:
         return None
-    try:
-        return datetime.fromtimestamp(published_parsed, timezone.utc)
-    except Exception:
-        logging.warning("Failed to parse published date for %s", published_parsed)
-        return None
+    return datetime.fromtimestamp(published_parsed, timezone.utc)
 
 def run_ingestion_pipeline() -> list[dict]:
     feeds = load_feeds()
@@ -46,9 +42,9 @@ def run_ingestion_pipeline() -> list[dict]:
                 "source_name": article["source_name"],
                 "title": article["title"],
                 "url": article["url"],
-                "published_at": published_at,
-                "author": article.get["author"],
-                "summary": article.get["summary"],
+                "published_at": parse_published(article.get("published_parsed")),
+                "author": article.get("author"),
+                "summary": article.get("summary"),
                 "full_text": full_text,
                 "content_fingerprint": content_fingerprint(full_text),
                 "ingested_at": datetime.now(timezone.utc)
