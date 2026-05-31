@@ -1,0 +1,30 @@
+[
+    {
+        "url": "https://www.theguardian.com/world/india/rss",
+        "name": "The Guardian - India"
+    },
+    {
+        "url": "https://timesofindia.indiatimes.com/rssfeedstopstories.cms",
+        "name": "Times of India - Top Stories"
+    },
+    {
+        "url": "https://www.sebi.gov.in/sebirss.xml",
+        "name": "SEBI - RSS"
+    },
+    {
+        "url": "https://www.thehindu.com/feeder/default.rss",
+        "name": "The Hindu"
+    },
+    {
+        "url": "https://feeds.feedburner.com/ndtvnews-top-stories",
+        "name": "NDTV - Top stories"
+    },
+    {
+        "url": "https://www.indiatoday.in/rss/home",
+        "name": "India Today - Home"
+    },
+    {
+        "url": "https://www.news18.com/rss/world.xml",
+        "name": "News18"
+    }
+]

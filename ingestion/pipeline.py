@@ -3,6 +3,7 @@ from pathlib import Path
 import uuid
 import logging
 from datetime import datetime, timezone
+import time
 
 from .rss import parse_rss, normalise_feed_entries
 from .fulltext import resolve_full_text, quality_gate
@@ -15,9 +16,11 @@ def load_feeds() -> list[dict]:
     with open(feeds_path) as f:
         return json.load(f)
 
-def parse_published(published_parsed: datetime) -> datetime:
+def parse_published(published_parsed) -> datetime:
     if published_parsed is None:
         return None
+    if isinstance(published_parsed, time.struct_time):
+        published_parsed = time.mktime(published_parsed)
     return datetime.fromtimestamp(published_parsed, timezone.utc)
 
 def run_ingestion_pipeline() -> list[dict]:

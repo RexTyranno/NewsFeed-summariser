@@ -1,2 +1,7 @@
 .venv
 .env
+.pytest_cache
+__pycache__
+*.xml
+.cursor
+pytest.ini
