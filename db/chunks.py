@@ -41,11 +41,16 @@ async def vector_search(
             )
         return await conn.fetch(
             """
-            SELECT c.* FROM chunks c
+            SELECT
+            a.id AS id,
+            c.id AS chunk_id,
+            c.article_id,
+            a.source_name, a.title, a.url, a.published_at, a.summary, a.snippet_only
+            FROM chunks c
             JOIN articles a ON a.id = c.article_id
-            WHERE a.published_at >= $3
+            WHERE a.published_at >= $2
             ORDER BY c.embedding <=> $1::vector
-            LIMIT $2
+            LIMIT $3
             """,
             str(embedding), k, recency_cutoff,
         )

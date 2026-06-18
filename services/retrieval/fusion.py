@@ -14,16 +14,11 @@ RRF_SCORE_KEY = "_rrf_score"
 
 
 def hit_id(row: dict[str, Any]) -> str:
-    """Stable id for RRF: prefer chunk id, else (article_id, chunk_index), else article_id."""
-    cid = row.get("id")
-    if cid is not None:
-        return f"chunk:{cid}"
-    aid = row.get("article_id")
-    if aid is not None and row.get("chunk_index") is not None:
-        return f"chunk:{aid}:{row['chunk_index']}"
-    if aid is not None:
-        return f"article:{aid}"
-    raise ValueError(f"Cannot derive hit id from row keys: {sorted(row)}")
+    # Canonical identity for frontend/API contract = article id
+    aid = row.get("article_id") or row.get("id")
+    if aid is None:
+        raise ValueError(f"Cannot derive article id from keys: {sorted(row)}")
+    return f"article:{aid}"
 
 
 def reciprocal_rank_fusion(
@@ -67,15 +62,17 @@ def dedupe_by_article(
     *,
     score_key: str = RRF_SCORE_KEY,
 ) -> list[dict[str, Any]]:
-    """Keep the single best-scoring row per article_id (for summarization context)."""
     best: dict[Any, dict[str, Any]] = {}
     for row in hits:
-        aid = row.get("article_id")
+        aid = row.get("article_id") or row.get("id")
         if aid is None:
             continue
         cur = best.get(aid)
         if cur is None or row.get(score_key, 0.0) > cur.get(score_key, 0.0):
-            best[aid] = row
+            normalized = dict(row)
+            normalized["article_id"] = aid
+            normalized["id"] = aid   # critical: id must be article id
+            best[aid] = normalized
     merged = list(best.values())
     merged.sort(key=lambda r: r.get(score_key, 0.0), reverse=True)
     return merged

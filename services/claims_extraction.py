@@ -1,15 +1,14 @@
 from __future__ import annotations
 
-import json
 import re
 from datetime import datetime
 from uuid import UUID
-import httpx
 import spacy
 import logging
 
 from db.claims import insert_claim, insert_entities
 from db.connection import get_conn
+from LLM_service.client import llm_client
 
 logger = logging.getLogger(__name__)
 
@@ -137,50 +136,6 @@ def _dep_triplets(sent: spacy.tokens.Span) -> list[tuple[str, str, str]]:
         triplets.append((subj_text, token.lemma_, obj_text))
     return triplets
 
-
-# Ollama fallback for claims extraction
-_OLLAMA_PROMPT = (
-    "Extract ONE factual claim from this news sentence.\n"
-    "Return ONLY valid JSON in this exact shape:\n"
-    '{"subject": "...", "predicate": "...", "object": "..."}\n'
-    "If no factual claim is present, return null.\n\n"
-    "Sentence: {sentence}"
-)
-
-async def _ollama_extract(sentence: str, ollama_url: str, model: str) -> dict | None:
-    """
-    Ask Ollama for a structured (subject, predicate, object) claim.
-    Returns None on any failure — callers must be resilient.
-    """
-    prompt = _OLLAMA_PROMPT.format(sentence=sentence)
-    try:
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            resp = await client.post(
-                f"{ollama_url}/api/generate",
-                json={"model": model, "prompt": prompt, "stream": False},
-            )
-            resp.raise_for_status()
-            raw = resp.json().get("response", "").strip()
-            # Strip markdown code fences Ollama sometimes adds
-            raw = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw, flags=re.MULTILINE).strip()
-            data = json.loads(raw)
-            if not data or not isinstance(data, dict):
-                return None
-            required = {"subject", "predicate", "object"}
-            if not required.issubset(data.keys()):
-                return None
-            if not all(str(data[k]).strip() for k in required):
-                return None
-            return {
-                "predicate": str(data["predicate"])[:200],
-                "object":    str(data["object"])[:500],
-                "subject_text": str(data["subject"])[:200] or None,
-                "extraction_method": "ollama_json",
-                "confidence": 0.60,
-            }
-    except Exception:
-        return None
-
 def _merge_sentence_claims(claims: list[dict]) -> list[dict]:
     numeric = next((c for c in claims if c.get("is_numeric")), None)
     dep = next((c for c in claims if c.get("extraction_method") == "spacy_dep"), None)
@@ -189,14 +144,40 @@ def _merge_sentence_claims(claims: list[dict]) -> list[dict]:
         return [numeric]
     return [numeric or dep] if (numeric or dep) else claims
 
+_LLM_CLAIM_PROMPT = (
+    "Extract ONE factual claim from this news sentence.\n"
+    "Return ONLY valid JSON in this exact shape:\n"
+    '{"subject": "...", "predicate": "...", "object": "..."}\n'
+    "If no factual claim is present, return null.\n\n"
+    "Sentence: {sentence}"
+)
+
+async def _llm_extract_claim(
+    sentence: str,
+    *,
+    model: str | None = None,
+) -> dict | None:
+    data = await llm_client.generate_json(
+        _LLM_CLAIM_PROMPT.format(sentence=sentence),
+        required_keys={"subject", "predicate", "object"},
+        model=model,
+    )
+    if data is None:
+        return None
+    return {
+        "predicate": str(data["predicate"])[:200],
+        "object": str(data["object"])[:500],
+        "subject_text": str(data["subject"])[:200] or None,
+        "extraction_method": "llm_json",  
+        "confidence": 0.60,
+    }
+
 # Public API for claims extraction
 async def extract_claims_for_article(
     article_id: UUID,
     body: str,
     published_at: datetime | None = None,
-    ollama_url: str = "http://localhost:11434",
-    ollama_model: str = "llama3",
-    use_ollama_fallback: bool = True,
+    model: str | None = None,
 ) -> dict:
     """
     Run the full extraction pipeline for one article.
@@ -204,8 +185,6 @@ async def extract_claims_for_article(
     Returns {"entities": [...], "claims": [...]} without writing to DB.
     Call `persist_claims()` to commit the result.
 
-    `use_ollama_fallback=False` is useful during batch reprocessing or testing
-    when you want deterministic, fast output.
     """
     nlp = _get_nlp()
     doc = nlp(body[:BODY_CHAR_LIMIT])
@@ -214,7 +193,7 @@ async def extract_claims_for_article(
     entity_texts = {e["text"].lower() for e in entities}
 
     all_claims: list[dict] = []
-    ollama_candidates: list[str] = []
+    llm_candidates: list[str] = []
 
     for sent in doc.sents:
         sent_text = sent.text.strip()
@@ -248,20 +227,19 @@ async def extract_claims_for_article(
             has_entity = any(et in sent_lower for et in entity_texts)
             if (
                 has_entity
-                and use_ollama_fallback
                 and len(sent_text) <= MAX_SPAN_CHARS
             ):
-                ollama_candidates.append(sent_text)
+                llm_candidates.append(sent_text)
         all_claims.extend(_merge_sentence_claims(sentence_claims))
 
     # Ollama, capped
-    if len(ollama_candidates) > MAX_OLLAMA_CALLS:
+    if len(llm_candidates) > MAX_OLLAMA_CALLS:
         logger.warning(
-        "article %s: %d Ollama candidates truncated to %d",
-        article_id, len(ollama_candidates), MAX_OLLAMA_CALLS,
+        "article %s: %d LLM candidates truncated to %d",
+        article_id, len(llm_candidates), MAX_OLLAMA_CALLS,
     )
-    for sent_text in ollama_candidates[:MAX_OLLAMA_CALLS]:
-        result = await _ollama_extract(sent_text, ollama_url, ollama_model)
+    for sent_text in llm_candidates[:MAX_OLLAMA_CALLS]:
+        result = await _llm_extract_claim(sent_text, model = model)
         if result:
             all_claims.append({
                 "article_id": article_id,
@@ -274,7 +252,6 @@ async def extract_claims_for_article(
             })
 
     return {"entities": entities, "claims": all_claims}
-
 
 async def persist_claims(article_id: UUID, extraction_result: dict) -> None:
     """
